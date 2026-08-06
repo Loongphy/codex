@@ -878,6 +878,13 @@ impl App {
             AppEvent::AuthFileChangedRetry { attempt } => {
                 self.handle_auth_file_changed(app_server, attempt).await;
             }
+            AppEvent::ServerOverloadedRetry {
+                attempt,
+                generation,
+            } => {
+                self.chat_widget
+                    .on_server_overloaded_retry(attempt, generation);
+            }
             AppEvent::SendAddCreditsNudgeEmail { credit_type } => {
                 if self
                     .chat_widget

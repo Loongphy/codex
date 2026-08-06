@@ -87,6 +87,15 @@ You can configure this behavior using `[tui].usage_limit_resume_prompt`:
   usage_limit_resume_prompt = ""
   ```
 
+### Server Overload Auto-Resume When `Selected model is at capacity`
+
+When the selected model is overloaded, Codext automatically submits `Continue` with bounded exponential-backoff retries (15s → 30s → 60s → 120s → 240s, up to 5 attempts), so long-running work continues without manual intervention.
+
+```toml
+[tui]
+server_overloaded_resume = false   # default true; set false to disable
+```
+
 ## Project Goals
 
 We will never merge code from the upstream repo; instead, we re-implement our changes on top of the latest upstream code.

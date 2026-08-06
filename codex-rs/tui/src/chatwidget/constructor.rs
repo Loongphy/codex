@@ -247,10 +247,13 @@ impl ChatWidget {
             current_goal_status_indicator: None,
             current_goal_status: None,
             external_editor_state: ExternalEditorState::Closed,
-            last_rendered_user_message_display: None,
+            pending_local_user_message_echo: None,
             last_non_retry_error: None,
             pending_auth_reload_attempt: None,
             pending_usage_limit_resume_turn: None,
+            pending_server_overloaded_resume_turn: None,
+            server_overloaded_resume_attempts: 0,
+            server_overloaded_resume_generation: 0,
             usage_limit_resume_waiting_for_auth_reload: false,
         };
 

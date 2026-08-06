@@ -9,6 +9,13 @@ const LEGACY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "Invalid prompt: we've limited access to this content for safety reasons.";
 const BIO_POLICY_SAFETY_ACCESS_BLOCK_PREFIX: &str =
     "This content was flagged for possible biological risk.";
+const SERVER_OVERLOADED_RESUME_DELAYS: [Duration; 5] = [
+    Duration::from_secs(15),
+    Duration::from_secs(30),
+    Duration::from_secs(60),
+    Duration::from_secs(120),
+    Duration::from_secs(240),
+];
 
 fn is_safety_access_block_message(message: &str) -> bool {
     message.starts_with(LEGACY_SAFETY_ACCESS_BLOCK_PREFIX)
@@ -108,6 +115,12 @@ impl ChatWidget {
         from_replay: bool,
     ) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
+        if !from_replay {
+            self.pending_server_overloaded_resume_turn = None;
+            self.server_overloaded_resume_attempts = 0;
+            self.server_overloaded_resume_generation =
+                self.server_overloaded_resume_generation.wrapping_add(1);
+        }
         let sanitized_last_agent_message = last_agent_message.as_deref().map(|message| {
             parse_assistant_markdown(message, self.config.cwd.as_path()).visible_markdown
         });
@@ -343,6 +356,38 @@ impl ChatWidget {
 
     pub(super) fn on_server_overloaded_error(&mut self, message: String) {
         self.input_queue.submit_pending_steers_after_interrupt = false;
+        if self.config.tui_server_overloaded_resume {
+            let next_attempt = self.server_overloaded_resume_attempts.saturating_add(1);
+            if let Some(retry_delay) = SERVER_OVERLOADED_RESUME_DELAYS
+                .get(usize::from(next_attempt.saturating_sub(1)))
+                .copied()
+            {
+                self.server_overloaded_resume_attempts = next_attempt;
+                self.server_overloaded_resume_generation =
+                    self.server_overloaded_resume_generation.wrapping_add(1);
+                let generation = self.server_overloaded_resume_generation;
+                self.pending_server_overloaded_resume_turn = Some(UserMessage::from(
+                    DEFAULT_SERVER_OVERLOADED_RESUME_PROMPT,
+                ));
+                let app_event_tx = self.app_event_tx.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(retry_delay).await;
+                    app_event_tx.send(AppEvent::ServerOverloadedRetry {
+                        attempt: next_attempt,
+                        generation,
+                    });
+                });
+            } else {
+                self.pending_server_overloaded_resume_turn = None;
+                self.server_overloaded_resume_generation =
+                    self.server_overloaded_resume_generation.wrapping_add(1);
+            }
+        } else {
+            self.pending_server_overloaded_resume_turn = None;
+            self.server_overloaded_resume_attempts = 0;
+            self.server_overloaded_resume_generation =
+                self.server_overloaded_resume_generation.wrapping_add(1);
+        }
         self.finalize_turn();
 
         let message = if message.trim().is_empty() {
@@ -353,6 +398,14 @@ impl ChatWidget {
 
         self.add_to_history(history_cell::new_warning_event(message));
         self.request_redraw();
+    }
+
+    pub(crate) fn on_server_overloaded_retry(&mut self, attempt: u8, generation: u64) {
+        if self.server_overloaded_resume_attempts != attempt
+            || self.server_overloaded_resume_generation != generation
+        {
+            return;
+        }
         self.maybe_send_next_queued_input();
     }
 

@@ -371,6 +371,12 @@ pub(crate) enum AppEvent {
         attempt: u8,
     },
 
+    /// Retry a server-overloaded turn after its backoff delay.
+    ServerOverloadedRetry {
+        attempt: u8,
+        generation: u64,
+    },
+
     /// Result of refreshing rate limits.
     RateLimitsLoaded {
         origin: RateLimitRefreshOrigin,

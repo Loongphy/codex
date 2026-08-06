@@ -483,6 +483,12 @@ const DEFAULT_OPENAI_BASE_URL: &str = "https://api.openai.com/v1";
 const DEFAULT_STATUS_LINE_ITEMS: [&str; 2] = ["model-with-reasoning", "current-dir"];
 const DEFAULT_USAGE_LIMIT_RESUME_PROMPT: &str =
     "The usage limit has been reset, so you can resume from where you left off.";
+const DEFAULT_SERVER_OVERLOADED_RESUME_PROMPT: &str = "Continue";
+
+struct PendingLocalUserMessageEcho {
+    display: UserMessageDisplay,
+    turn_id: Option<String>,
+}
 
 /// Common initialization parameters shared by all `ChatWidget` constructors.
 pub(crate) struct ChatWidgetInit {
@@ -764,10 +770,13 @@ pub(crate) struct ChatWidget {
     current_goal_status_indicator: Option<GoalStatusIndicator>,
     current_goal_status: Option<GoalStatusState>,
     external_editor_state: ExternalEditorState,
-    last_rendered_user_message_display: Option<UserMessageDisplay>,
+    pending_local_user_message_echo: Option<PendingLocalUserMessageEcho>,
     last_non_retry_error: Option<(String, String)>,
     pending_auth_reload_attempt: Option<u8>,
     pending_usage_limit_resume_turn: Option<UserMessage>,
+    pending_server_overloaded_resume_turn: Option<UserMessage>,
+    server_overloaded_resume_attempts: u8,
+    server_overloaded_resume_generation: u64,
     usage_limit_resume_waiting_for_auth_reload: bool,
 }
 
@@ -1268,7 +1277,12 @@ impl ChatWidget {
         self.request_redraw();
     }
 
-    fn on_committed_user_message(&mut self, items: &[UserInput], from_replay: bool) {
+    fn on_committed_user_message(
+        &mut self,
+        items: &[UserInput],
+        turn_id: &str,
+        from_replay: bool,
+    ) {
         let display = Self::user_message_display_from_inputs(items);
         if from_replay {
             if self.review.is_review_mode {
@@ -1299,21 +1313,28 @@ impl ChatWidget {
                 let pending_display =
                     user_message_display_for_history(pending.user_message, &pending.history_record);
                 self.on_user_message_display(pending_display);
-            } else if self.last_rendered_user_message_display.as_ref() != Some(&display) {
+            } else {
                 tracing::warn!(
                     "pending steer matched compare key but queue was empty when rendering committed user message"
                 );
                 self.on_user_message_display(display);
             }
-        } else if !self.review.is_review_mode
-            && self.last_rendered_user_message_display.as_ref() != Some(&display)
-        {
-            self.on_user_message_display(display);
+        } else if !self.review.is_review_mode {
+            let is_local_echo = self
+                .pending_local_user_message_echo
+                .as_ref()
+                .is_some_and(|pending| {
+                    pending.turn_id.as_deref() == Some(turn_id) && pending.display == display
+                });
+            if is_local_echo {
+                self.pending_local_user_message_echo = None;
+            } else {
+                self.on_user_message_display(display);
+            }
         }
     }
 
     fn on_user_message_display(&mut self, display: UserMessageDisplay) {
-        self.last_rendered_user_message_display = Some(display.clone());
         if !display.message.trim().is_empty()
             || !display.text_elements.is_empty()
             || !display.local_images.is_empty()

@@ -3423,6 +3423,11 @@
           "default": null,
           "description": "Working directory to use when resuming or forking a session. When unset, prompt if the current and session directories differ."
         },
+        "server_overloaded_resume": {
+          "default": true,
+          "description": "Automatically submit `Continue` after a turn fails with `ServerOverloaded`. Defaults to `true`.",
+          "type": "boolean"
+        },
         "session_picker_view": {
           "allOf": [
             {
