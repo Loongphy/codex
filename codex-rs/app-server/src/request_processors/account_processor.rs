@@ -76,6 +76,8 @@ pub(crate) struct AccountRequestProcessor {
     outgoing: Arc<OutgoingMessageSender>,
     config: Arc<Config>,
     config_manager: ConfigManager,
+    thread_watch_manager: ThreadWatchManager,
+    auth_transition_lock: Arc<Mutex<()>>,
     active_login: Arc<Mutex<Option<ActiveLogin>>>,
 }
 
@@ -86,6 +88,8 @@ impl AccountRequestProcessor {
         outgoing: Arc<OutgoingMessageSender>,
         config: Arc<Config>,
         config_manager: ConfigManager,
+        thread_watch_manager: ThreadWatchManager,
+        auth_transition_lock: Arc<Mutex<()>>,
     ) -> Self {
         Self {
             auth_manager,
@@ -93,6 +97,8 @@ impl AccountRequestProcessor {
             outgoing,
             config,
             config_manager,
+            thread_watch_manager,
+            auth_transition_lock,
             active_login: Arc::new(Mutex::new(None)),
         }
     }
@@ -1045,6 +1051,36 @@ impl AccountRequestProcessor {
         params: GetAccountParams,
     ) -> Result<GetAccountResponse, JSONRPCErrorError> {
         let do_refresh = params.refresh_token;
+        let mut auth_changed = false;
+
+        if params.reload_auth_from_storage {
+            let _auth_transition_guard = self.auth_transition_lock.lock().await;
+            if *self
+                .thread_watch_manager
+                .subscribe_running_turn_count()
+                .borrow()
+                == 0
+            {
+                let status = self.auth_manager.reload_with_status().await;
+                match handle_auth_reload_status(
+                    status,
+                    &self.auth_manager,
+                    &self.thread_manager,
+                    &self.config_manager,
+                    &self.outgoing,
+                    &self.config.chatgpt_base_url,
+                    self.config.http_client_factory(),
+                    "account/get",
+                )
+                .await
+                {
+                    AuthReloadStatus::Reloaded { changed } => auth_changed = changed,
+                    AuthReloadStatus::Failed => {
+                        return Err(internal_error("failed to reload auth from storage"));
+                    }
+                }
+            }
+        }
 
         self.refresh_token_if_requested(do_refresh).await;
 
@@ -1060,6 +1096,7 @@ impl AccountRequestProcessor {
         Ok(GetAccountResponse {
             account,
             requires_openai_auth: account_state.requires_openai_auth,
+            auth_changed,
         })
     }
 

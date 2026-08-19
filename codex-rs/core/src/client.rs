@@ -520,6 +520,13 @@ impl ModelClient {
             .unwrap_or_else(std::sync::PoisonError::into_inner) = websocket_session;
     }
 
+    /// Invalidate any cached model-transport state (for example a reused
+    /// WebSocket session) so the next turn re-establishes transport for the
+    /// current auth snapshot.
+    pub(crate) fn invalidate_cached_transport_state(&self) {
+        self.store_cached_websocket_session(WebsocketSession::default());
+    }
+
     pub(crate) fn force_http_fallback(
         &self,
         session_telemetry: &SessionTelemetry,

@@ -100,6 +100,7 @@ impl App {
         let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        let auth_watch = Some(AuthWatch::start(config.codex_home.as_path(), app_event_tx.clone()));
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_settings(
@@ -394,6 +395,7 @@ See the Codex keymap documentation for supported actions and examples."
             app_event_tx,
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
+            _auth_watch: auth_watch,
             config,
             launch_cwd,
             state_db,
@@ -432,6 +434,7 @@ See the Codex keymap documentation for supported actions and examples."
             windows_sandbox: WindowsSandboxState::default(),
             thread_event_channels: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
+            rate_limit_poll_task: None,
             agent_navigation: AgentNavigationState::default(),
             side_threads: HashMap::new(),
             abandoned_side_threads: HashSet::new(),
@@ -568,6 +571,7 @@ See the Codex keymap documentation for supported actions and examples."
                     reset_hint_request_id,
                 },
             );
+            app.start_rate_limit_polling();
         }
 
         let mut listen_for_app_server_events = true;
