@@ -114,6 +114,27 @@ flowchart TD
       H --> I[Push finished branch]
 ```
 
+## BUG FIX
+
+### Windows Terminal light-theme colors rendered unreadable (fixed)
+
+**Issue:** <https://github.com/Loongphy/codext/issues/18>
+
+Since upstream `0.148.0`, Codex stopped querying the terminal's real foreground/background
+colors via OSC 10/11 on Windows and only read the legacy console attributes
+(`GetConsoleScreenBufferInfoEx`). Those legacy attributes do not reflect the color scheme that
+Windows Terminal actually renders, so light themes were detected as dark and UI surfaces such as
+the composer input and resume-list rows could render dark text on dark backgrounds.
+Running `color F0` before launching was a known workaround.
+
+This is a downstream manifestation of the upstream regression tracked in
+[openai/codex#39418](https://github.com/openai/codex/issues/39418).
+
+**Fix:** restore the bounded OSC 10/11 default-color probe on Windows (the legacy attribute read
+remains as fallback for terminals without OSC support). Unlike the pre-`0.148` implementation,
+bytes drained during the probe that are not part of the OSC replies are replayed back into the
+console input queue via `WriteConsoleInputW`, so typeahead typed around startup is preserved.
+
 ## Skills
 
 When syncing to the latest upstream codex version, use `.agents/skills/codex-upstream-reapply` to re-implement our custom requirements on top of the newest code, avoiding merge conflicts from the old branch history.
