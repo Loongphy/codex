@@ -58,6 +58,23 @@ Implementation must follow the status-header skill .agents/skills/status-header/
 
 - The app-server now reloads auth from storage before `thread/start`, `thread/resume`, and `turn/start` when no turn is running.
 - This change supports Codex App account switching through [Loongphy/codex-auth#103](https://github.com/Loongphy/codex-auth/pull/103), allowing the app-server to pick up the newly selected account at the next safe request boundary.
+
+## TUI Windows terminal light-theme color detection (bug fix)
+
+> **Reapply policy:** this entry tracks an *upstream regression*, not a long-term fork behavior.
+> Upstream tracking issue: [openai/codex#39418](https://github.com/openai/codex/issues/39418)
+> (regression introduced by upstream PR #38641 shipped in 0.148.0). On each future reapply,
+> **first check whether upstream has fixed #39418 in the new TAG** (inspect the `windows`
+> module of `codex-rs/tui/src/terminal_probe.rs` in the new tag: if it queries OSC 10/11 again
+> or otherwise derives default colors from the visible terminal theme, upstream fixed it).
+> If upstream fixed it: do NOT re-implement this entry; delete this section and the matching
+> `## BUG FIX` section in `README.md`. If not: re-implement it per the bullets below.
+
+- On Windows, detect terminal default foreground/background colors via a bounded OSC 10/11 probe on raw console handles (`WriteFile` query + `ReadFile` reply under a temporary `ENABLE_VIRTUAL_TERMINAL_INPUT` mode), because ConPTY hosts such as Windows Terminal expose their visible theme through OSC replies while legacy screen-buffer attributes stay scheme-independent (they report dark even for light themes).
+- Keep the existing legacy `GetConsoleScreenBufferInfoEx` attribute read strictly as fallback for terminals that cannot answer OSC 10/11.
+- Preserve startup typeahead: bytes drained during the probe that are not part of recognized OSC replies are stripped (complete replies removed, incomplete trailing reply dropped) and replayed into the console input queue as key events via `WriteConsoleInputW`; replay failures must never fail the color probe. Crossterm on Windows reads INPUT_RECORDs and has no Unix-style byte replay helper, hence the manual re-injection.
+- Run the color probe before the cursor-position and keyboard-enhancement queries during TUI init on non-unix platforms so OSC replies never interleave with those responses in the console input queue (`probe_windows_default_colors()` moved before `cursor_position_with_crossterm`).
+- User-visible result: composer input box and resume-list rows follow the visible Windows Terminal theme on light schemes instead of rendering dark-on-dark.
 - Auth is still not hot-swapped in the middle of an active turn; reload is skipped while `running_turn_count` is nonzero and the next request boundary gets the new auth.
 - ChatGPT account/workspace switches inside the same auth mode are treated as auth changes by comparing the refresh-relevant auth snapshot, not only the top-level auth mode.
 - When a reload changes auth, loaded threads invalidate their cached model transport state so a reused WebSocket session created under the previous account is not used for the next turn.

@@ -4,6 +4,11 @@ on:
   push:
     branches:
       - main
+    # Documentation-only pushes must not trigger (or cancel, via concurrency) a release run.
+    paths-ignore:
+      - "**.md"
+      - "docs/**"
+      - ".agents/**"
   workflow_dispatch:
 
 concurrency:
