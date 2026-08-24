@@ -711,25 +711,233 @@ mod imp {
 #[cfg(windows)]
 mod imp {
     use super::DefaultColors;
+    use super::osc_payload_end;
+    use super::parse_default_colors;
     use std::io;
+    use std::io::ErrorKind;
     use std::time::Duration;
+    use std::time::Instant;
     use windows_sys::Win32::Foundation::HANDLE;
     use windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE;
+    use windows_sys::Win32::Foundation::WAIT_OBJECT_0;
+    use windows_sys::Win32::Foundation::WAIT_TIMEOUT;
+    use windows_sys::Win32::Storage::FileSystem::ReadFile;
+    use windows_sys::Win32::Storage::FileSystem::WriteFile;
     use windows_sys::Win32::System::Console::CONSOLE_SCREEN_BUFFER_INFOEX;
+    use windows_sys::Win32::System::Console::ENABLE_VIRTUAL_TERMINAL_INPUT;
+    use windows_sys::Win32::System::Console::GetConsoleMode;
     use windows_sys::Win32::System::Console::GetConsoleScreenBufferInfoEx;
     use windows_sys::Win32::System::Console::GetStdHandle;
+    use windows_sys::Win32::System::Console::INPUT_RECORD;
+    use windows_sys::Win32::System::Console::INPUT_RECORD_0;
+    use windows_sys::Win32::System::Console::KEY_EVENT;
+    use windows_sys::Win32::System::Console::KEY_EVENT_RECORD;
+    use windows_sys::Win32::System::Console::KEY_EVENT_RECORD_0;
+    use windows_sys::Win32::System::Console::SetConsoleMode;
+    use windows_sys::Win32::System::Console::STD_INPUT_HANDLE;
     use windows_sys::Win32::System::Console::STD_OUTPUT_HANDLE;
+    use windows_sys::Win32::System::Console::WriteConsoleInputW;
+    use windows_sys::Win32::System::Threading::WaitForSingleObject;
 
-    /// Reads default colors from the console screen buffer without consuming terminal input.
+    /// Queries OSC 10 and OSC 11 default colors under one shared deadline.
     ///
-    /// OSC replies share the console input queue with user keystrokes on Windows. Reading them
-    /// directly during startup can discard composer typeahead, so use the non-reading console
-    /// color fallback instead.
-    pub(crate) fn default_colors(_timeout: Duration) -> io::Result<Option<DefaultColors>> {
+    /// ConPTY hosts such as Windows Terminal expose their visible theme colors through OSC
+    /// replies, while the legacy screen-buffer attributes keep scheme-independent defaults that
+    /// report dark colors even for light terminal themes. Prefer the OSC replies first, then
+    /// fall back to the legacy console color table for terminals that cannot answer.
+    pub(crate) fn default_colors(timeout: Duration) -> io::Result<Option<DefaultColors>> {
         let Ok(output) = std_handle(STD_OUTPUT_HANDLE) else {
             return Ok(None);
         };
+
+        if let Ok(input) = std_handle(STD_INPUT_HANDLE)
+            && let Ok(Some(colors)) = query_osc_default_colors(input, output, timeout)
+        {
+            return Ok(Some(colors));
+        }
+
         Ok(query_console_default_colors(output).ok().flatten())
+    }
+
+    fn query_osc_default_colors(
+        input: HANDLE,
+        output: HANDLE,
+        timeout: Duration,
+    ) -> io::Result<Option<DefaultColors>> {
+        let _vt_input = VirtualTerminalInputMode::enable(input)?;
+        write_all(output, b"\x1B]10;?\x1B\\\x1B]11;?\x1B\\")?;
+        let mut buffer = Vec::new();
+        let colors = read_until(input, timeout, &mut buffer, parse_default_colors)?;
+        // Reading raw bytes drains the same console input queue crossterm's event source reads.
+        // Hand every byte outside the OSC replies back to the queue so typeahead typed around
+        // the probe survives; replay failures must never fail the color probe.
+        reinject_leftover_console_input(input, &strip_osc_replies(&buffer));
+        Ok(colors)
+    }
+
+    fn read_until(
+        handle: HANDLE,
+        timeout: Duration,
+        buffer: &mut Vec<u8>,
+        mut parse: impl FnMut(&[u8]) -> Option<DefaultColors>,
+    ) -> io::Result<Option<DefaultColors>> {
+        let deadline = Instant::now() + timeout;
+        loop {
+            if let Some(colors) = parse(buffer) {
+                return Ok(Some(colors));
+            }
+
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            let timeout_ms = deadline
+                .saturating_duration_since(now)
+                .as_millis()
+                .min(u32::MAX as u128) as u32;
+            match unsafe { WaitForSingleObject(handle, timeout_ms) } {
+                WAIT_OBJECT_0 => read_once(handle, buffer)?,
+                WAIT_TIMEOUT => return Ok(None),
+                _ => return Err(io::Error::last_os_error()),
+            }
+        }
+    }
+
+    fn read_once(handle: HANDLE, buffer: &mut Vec<u8>) -> io::Result<()> {
+        let mut chunk = [0_u8; 256];
+        let mut read = 0;
+        let ok = unsafe {
+            ReadFile(
+                handle,
+                chunk.as_mut_ptr().cast(),
+                chunk.len() as u32,
+                &mut read,
+                std::ptr::null_mut(),
+            )
+        };
+        if ok == 0 {
+            return Err(io::Error::last_os_error());
+        }
+        buffer.extend_from_slice(&chunk[..read as usize]);
+        Ok(())
+    }
+
+    fn write_all(handle: HANDLE, mut bytes: &[u8]) -> io::Result<()> {
+        while !bytes.is_empty() {
+            let mut written = 0;
+            let ok = unsafe {
+                WriteFile(
+                    handle,
+                    bytes.as_ptr().cast(),
+                    bytes.len().min(u32::MAX as usize) as u32,
+                    &mut written,
+                    std::ptr::null_mut(),
+                )
+            };
+            if ok == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            if written == 0 {
+                return Err(io::Error::from(ErrorKind::WriteZero));
+            }
+            bytes = &bytes[written as usize..];
+        }
+        Ok(())
+    }
+
+    /// Removes complete OSC replies, plus an incomplete trailing reply, from raw probe bytes.
+    ///
+    /// Only bytes outside recognized replies are replayed into the console queue, so a timed-out
+    /// partial response can never leak into the composer as keystrokes.
+    fn strip_osc_replies(buffer: &[u8]) -> Vec<u8> {
+        let mut leftover = Vec::with_capacity(buffer.len());
+        let mut rest = buffer;
+        while let Some(&byte) = rest.first() {
+            if byte == 0x1B && rest.get(1) == Some(&b']') {
+                match osc_payload_end(&rest[2..]) {
+                    Some((payload_end, terminator_len)) => {
+                        rest = &rest[2 + payload_end + terminator_len..];
+                        continue;
+                    }
+                    None => break,
+                }
+            }
+            leftover.push(byte);
+            rest = &rest[1..];
+        }
+        leftover
+    }
+
+    /// Replays bytes drained during the probe back into the console input queue.
+    ///
+    /// Crossterm's Windows event source reads INPUT_RECORDs and has no Unix-style byte replay
+    /// helper, so leftover printable characters become key-down records without virtual key
+    /// codes. Control characters cannot round-trip through such records and are skipped.
+    fn reinject_leftover_console_input(handle: HANDLE, leftover: &[u8]) {
+        let records: Vec<INPUT_RECORD> = String::from_utf8_lossy(leftover)
+            .chars()
+            .filter(|ch| (*ch as u32) <= 0xffff && !ch.is_control() && *ch != '\u{fffd}')
+            .map(|ch| INPUT_RECORD {
+                EventType: KEY_EVENT as u16,
+                Event: INPUT_RECORD_0 {
+                    KeyEvent: KEY_EVENT_RECORD {
+                        bKeyDown: 1,
+                        wRepeatCount: 1,
+                        wVirtualKeyCode: 0,
+                        wVirtualScanCode: 0,
+                        uChar: KEY_EVENT_RECORD_0 {
+                            UnicodeChar: ch as u16,
+                        },
+                        dwControlKeyState: 0,
+                    },
+                },
+            })
+            .collect();
+        if records.is_empty() {
+            return;
+        }
+        let mut written = 0;
+        let _ = unsafe {
+            WriteConsoleInputW(
+                handle,
+                records.as_ptr(),
+                records.len() as u32,
+                &mut written,
+            )
+        };
+    }
+
+    /// Temporarily enables virtual terminal input so ReadFile returns reply bytes.
+    struct VirtualTerminalInputMode {
+        handle: HANDLE,
+        original_mode: u32,
+    }
+
+    impl VirtualTerminalInputMode {
+        fn enable(handle: HANDLE) -> io::Result<Self> {
+            let mut original_mode = 0;
+            if unsafe { GetConsoleMode(handle, &mut original_mode) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            let requested_mode = original_mode | ENABLE_VIRTUAL_TERMINAL_INPUT;
+            if unsafe { SetConsoleMode(handle, requested_mode) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+
+            Ok(Self {
+                handle,
+                original_mode,
+            })
+        }
+    }
+
+    impl Drop for VirtualTerminalInputMode {
+        fn drop(&mut self) {
+            unsafe {
+                SetConsoleMode(self.handle, self.original_mode);
+            }
+        }
     }
 
     fn query_console_default_colors(output: HANDLE) -> io::Result<Option<DefaultColors>> {
@@ -838,7 +1046,7 @@ mod imp {
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows))]
 fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
     let prefix = format!("\x1B]{slot};");
     let start = find_subslice(buffer, prefix.as_bytes())?;
@@ -849,14 +1057,14 @@ fn parse_osc_color(buffer: &[u8], slot: u8) -> Option<(u8, u8, u8)> {
     parse_osc_rgb(payload)
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows))]
 fn parse_default_colors(buffer: &[u8]) -> Option<DefaultColors> {
     let fg = parse_osc_color(buffer, /*slot*/ 10)?;
     let bg = parse_osc_color(buffer, /*slot*/ 11)?;
     Some(DefaultColors { fg, bg })
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows))]
 fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
     let mut idx = 0;
     while idx < buffer.len() {
@@ -869,7 +1077,7 @@ fn osc_payload_end(buffer: &[u8]) -> Option<(usize, usize)> {
     None
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows))]
 fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
     let (prefix, values) = payload.trim().split_once(':')?;
     if !prefix.eq_ignore_ascii_case("rgb") && !prefix.eq_ignore_ascii_case("rgba") {
@@ -886,7 +1094,7 @@ fn parse_osc_rgb(payload: &str) -> Option<(u8, u8, u8)> {
     parts.next().is_none().then_some((r, g, b))
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows))]
 fn parse_osc_component(component: &str) -> Option<u8> {
     match component.len() {
         2 => u8::from_str_radix(component, 16).ok(),
@@ -897,7 +1105,7 @@ fn parse_osc_component(component: &str) -> Option<u8> {
     }
 }
 
-#[cfg(any(unix, test))]
+#[cfg(any(unix, windows))]
 fn find_subslice(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
