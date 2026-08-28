@@ -63,7 +63,9 @@ Implementation must follow the status-header skill .agents/skills/status-header/
 
 > **Reapply policy:** this entry tracks an *upstream regression*, not a long-term fork behavior.
 > Upstream tracking issue: [openai/codex#39418](https://github.com/openai/codex/issues/39418)
-> (regression introduced by upstream PR #38641 shipped in 0.148.0). On each future reapply,
+> (regression introduced by upstream PR #38641 shipped in 0.148.0; closed upstream without a fix in the
+> tagged sources, still reproducible on 0.150.1 per [openai/codex#41242](https://github.com/openai/codex/issues/41242)).
+> On each future reapply,
 > **first check whether upstream has fixed #39418 in the new TAG** (inspect the `windows`
 > module of `codex-rs/tui/src/terminal_probe.rs` in the new tag: if it queries OSC 10/11 again
 > or otherwise derives default colors from the visible terminal theme, upstream fixed it).

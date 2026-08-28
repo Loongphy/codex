@@ -128,7 +128,10 @@ the composer input and resume-list rows could render dark text on dark backgroun
 Running `color F0` before launching was a known workaround.
 
 This is a downstream manifestation of the upstream regression tracked in
-[openai/codex#39418](https://github.com/openai/codex/issues/39418).
+[openai/codex#39418](https://github.com/openai/codex/issues/39418). That upstream issue was closed
+without a fix reaching the tagged sources; the same regression is still reported against upstream
+`0.150.1` in [openai/codex#41242](https://github.com/openai/codex/issues/41242), so Codext keeps
+carying the fix.
 
 **Fix:** restore the bounded OSC 10/11 default-color probe on Windows (the legacy attribute read
 remains as fallback for terminals without OSC support). Unlike the pre-`0.148` implementation,

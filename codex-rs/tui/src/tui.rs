@@ -490,15 +490,17 @@ pub(crate) fn init() -> Result<InitializedTerminal> {
     #[cfg(not(unix))]
     let mut backend = CrosstermBackend::new(stdout());
 
+    // Probe default colors before the cursor and keyboard queries on Windows so OSC replies
+    // never interleave with those responses in the console input queue.
+    #[cfg(windows)]
+    probe_windows_default_colors();
+
     #[cfg(not(unix))]
     let cursor_pos = cursor_position_with_crossterm(&mut backend);
 
     #[cfg(not(unix))]
     let enhanced_keys_supported =
         !keyboard_modes::keyboard_enhancement_disabled() && detect_keyboard_enhancement_supported();
-
-    #[cfg(windows)]
-    probe_windows_default_colors();
 
     let tui = CustomTerminal::with_options_and_cursor_position(backend, cursor_pos)?;
     let stderr_guard = terminal_stderr::TerminalStderrGuard::install()?;
