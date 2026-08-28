@@ -116,7 +116,7 @@ flowchart TD
 
 ## BUG FIX
 
-### Windows Terminal light-theme colors rendered unreadable (fixed)
+### Windows Terminal light-theme colors rendered unreadable
 
 **Issue:** <https://github.com/Loongphy/codext/issues/18>
 
