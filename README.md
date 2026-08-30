@@ -116,7 +116,10 @@ flowchart TD
 
 ## BUG FIX
 
-### Windows Terminal light-theme colors rendered unreadable
+_(none currently carried; the Windows Terminal light-theme fix below was absorbed upstream)_
+
+<details>
+<summary>Historical: Windows Terminal light-theme colors rendered unreadable (fixed upstream in 0.151.0)</summary>
 
 **Issue:** <https://github.com/Loongphy/codext/issues/18>
 
@@ -128,15 +131,12 @@ the composer input and resume-list rows could render dark text on dark backgroun
 Running `color F0` before launching was a known workaround.
 
 This is a downstream manifestation of the upstream regression tracked in
-[openai/codex#39418](https://github.com/openai/codex/issues/39418). That upstream issue was closed
-without a fix reaching the tagged sources; the same regression is still reported against upstream
-`0.150.1` in [openai/codex#41242](https://github.com/openai/codex/issues/41242), so Codext keeps
-carying the fix.
+[openai/codex#39418](https://github.com/openai/codex/issues/39418). Codext carried its own
+bounded OSC 10/11 default-color probe with typeahead replay; upstream re-added an equivalent
+OSC-based Windows color probe in `rust-v0.151.0` (`codex-rs/tui/src/terminal_probe/windows.rs`),
+so Codext no longer carries this fix.
 
-**Fix:** restore the bounded OSC 10/11 default-color probe on Windows (the legacy attribute read
-remains as fallback for terminals without OSC support). Unlike the pre-`0.148` implementation,
-bytes drained during the probe that are not part of the OSC replies are replayed back into the
-console input queue via `WriteConsoleInputW`, so typeahead typed around startup is preserved.
+</details>
 
 ## Skills
 
