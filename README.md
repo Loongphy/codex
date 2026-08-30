@@ -114,30 +114,6 @@ flowchart TD
       H --> I[Push finished branch]
 ```
 
-## BUG FIX
-
-_(none currently carried; the Windows Terminal light-theme fix below was absorbed upstream)_
-
-<details>
-<summary>Historical: Windows Terminal light-theme colors rendered unreadable (fixed upstream in 0.151.0)</summary>
-
-**Issue:** <https://github.com/Loongphy/codext/issues/18>
-
-Since upstream `0.148.0`, Codex stopped querying the terminal's real foreground/background
-colors via OSC 10/11 on Windows and only read the legacy console attributes
-(`GetConsoleScreenBufferInfoEx`). Those legacy attributes do not reflect the color scheme that
-Windows Terminal actually renders, so light themes were detected as dark and UI surfaces such as
-the composer input and resume-list rows could render dark text on dark backgrounds.
-Running `color F0` before launching was a known workaround.
-
-This is a downstream manifestation of the upstream regression tracked in
-[openai/codex#39418](https://github.com/openai/codex/issues/39418). Codext carried its own
-bounded OSC 10/11 default-color probe with typeahead replay; upstream re-added an equivalent
-OSC-based Windows color probe in `rust-v0.151.0` (`codex-rs/tui/src/terminal_probe/windows.rs`),
-so Codext no longer carries this fix.
-
-</details>
-
 ## Skills
 
 When syncing to the latest upstream codex version, use `.agents/skills/codex-upstream-reapply` to re-implement our custom requirements on top of the newest code, avoiding merge conflicts from the old branch history.
