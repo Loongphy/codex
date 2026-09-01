@@ -576,6 +576,13 @@ impl ModelClient {
         std::mem::take(&mut *cached_websocket_session)
     }
 
+    /// Invalidate any cached model-transport state (for example a reused
+    /// WebSocket session) so the next turn re-establishes transport for the
+    /// current auth snapshot.
+    pub(crate) fn invalidate_cached_transport_state(&self) {
+        self.store_cached_websocket_session(WebsocketSession::default());
+    }
+
     fn store_cached_websocket_session(&self, websocket_session: WebsocketSession) {
         *self
             .state
