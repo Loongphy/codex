@@ -4,6 +4,7 @@
 //! remains isolated from protected interactive requests until the initialized composer owns it.
 
 use super::*;
+use crate::auth_watch::AuthWatch;
 use crate::session_start::SessionStartAction;
 use crate::session_start::cancel_session_start;
 use crate::session_start::complete_session_start;
@@ -126,6 +127,7 @@ impl App {
         let startup_started_at = Instant::now();
         let (app_event_tx, mut app_event_rx) = unbounded_channel();
         let app_event_tx = AppEventSender::new(app_event_tx);
+        let auth_watch = Some(AuthWatch::start(config.codex_home.as_path(), app_event_tx.clone()));
         emit_project_config_warnings(&app_event_tx, &config);
         emit_system_bwrap_warning(&app_event_tx, &config);
         tui.set_notification_settings(
@@ -483,6 +485,7 @@ See the Codex keymap documentation for supported actions and examples."
             app_event_tx,
             chat_widget,
             workspace_command_runner: Some(workspace_command_runner),
+            _auth_watch: auth_watch,
             config,
             launch_cwd,
             runtime_working_directory_override: None,
@@ -524,6 +527,7 @@ See the Codex keymap documentation for supported actions and examples."
             thread_event_channels: HashMap::new(),
             temporary_structured_requests: HashMap::new(),
             thread_event_listener_tasks: HashMap::new(),
+            rate_limit_poll_task: None,
             agent_navigation: AgentNavigationState::default(),
             agents_overview: Default::default(),
             side_threads: HashMap::new(),
@@ -686,6 +690,7 @@ See the Codex keymap documentation for supported actions and examples."
                     reset_hint_request_id,
                 },
             );
+            app.start_rate_limit_polling();
         }
 
         let mut listen_for_app_server_events = true;

@@ -40,6 +40,7 @@ impl ChatWidget {
         self.current_rollout_path = session.rollout_path.clone();
         self.current_cwd = Some(session.cwd.to_path_buf());
         self.config.cwd = session.cwd.clone();
+        self.sync_status_header_git_status_poller();
         if connector_scope_changed {
             self.invalidate_connector_scope();
         }
